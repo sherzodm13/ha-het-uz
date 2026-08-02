@@ -1,0 +1,34 @@
+{
+  "title": "HET Узбекистан",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Подключение к HET Узбекистан",
+        "description": "Введите данные для входа на cabinet.het.uz.",
+        "data": {"username": "Логин", "password": "Пароль"}
+      },
+      "reauth_confirm": {
+        "title": "Повторная авторизация HET",
+        "description": "Введите актуальный пароль личного кабинета.",
+        "data": {"password": "Пароль"}
+      }
+    },
+    "error": {"cannot_connect": "Не удалось подключиться к HET", "invalid_auth": "Неверный логин или пароль"},
+    "abort": {"already_configured": "Эта учётная запись уже настроена", "reauth_successful": "Авторизация обновлена"}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройки опроса HET",
+        "data": {"scan_interval": "Интервал обновления (минуты)"}
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {"name": "Текущий баланс"},
+      "current_month_kwh": {"name": "Начислено кВт⋅ч за текущий месяц"},
+      "current_month_amount": {"name": "Начисленная сумма за текущий месяц"}
+    }
+  }
+}

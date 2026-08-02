@@ -1,0 +1,34 @@
+{
+  "title": "HET O‘zbekiston",
+  "config": {
+    "step": {
+      "user": {
+        "title": "HET O‘zbekistonga ulanish",
+        "description": "cabinet.het.uz login va parolini kiriting.",
+        "data": {"username": "Login", "password": "Parol"}
+      },
+      "reauth_confirm": {
+        "title": "HET hisobini qayta ulash",
+        "description": "Kabinetning joriy parolini kiriting.",
+        "data": {"password": "Parol"}
+      }
+    },
+    "error": {"cannot_connect": "HET bilan aloqa o‘rnatilmadi", "invalid_auth": "Login yoki parol noto‘g‘ri"},
+    "abort": {"already_configured": "Bu hisob allaqachon sozlangan", "reauth_successful": "Avtorizatsiya yangilandi"}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HET so‘rov sozlamalari",
+        "data": {"scan_interval": "Yangilash oralig‘i (daqiqa)"}
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {"name": "Joriy balans"},
+      "current_month_kwh": {"name": "Joriy oy uchun kVt⋅soat"},
+      "current_month_amount": {"name": "Joriy oy uchun summa"}
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "title": "HET Uzbekistan",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to HET Uzbekistan",
+        "description": "Enter the credentials for cabinet.het.uz.",
+        "data": {"username": "Login", "password": "Password"}
+      },
+      "reauth_confirm": {
+        "title": "Reconnect to HET Uzbekistan",
+        "description": "Enter the current cabinet password.",
+        "data": {"password": "Password"}
+      }
+    },
+    "error": {"cannot_connect": "Cannot connect to HET", "invalid_auth": "Invalid login or password"},
+    "abort": {"already_configured": "This account is already configured", "reauth_successful": "Authentication updated"}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HET polling settings",
+        "data": {"scan_interval": "Update interval (minutes)"}
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {"name": "Balance"},
+      "current_month_kwh": {"name": "Current month energy"},
+      "current_month_amount": {"name": "Current month amount"}
+    }
+  }
+}

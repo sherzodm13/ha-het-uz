@@ -1,0 +1,11 @@
+{
+  "domain": "het_uz",
+  "name": "HET Uzbekistan",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/sherzodm13/ha-het-uz",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "1.0.0"
+}
