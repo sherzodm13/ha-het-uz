@@ -51,6 +51,7 @@ class HetApiClient:
         self._login = login
         self._password = password
         self._token: str | None = None
+        self._coato_code: str | None = None
 
     async def _json(self, response: ClientResponse) -> dict[str, Any]:
         try:
@@ -88,7 +89,13 @@ class HetApiClient:
         if not isinstance(token, str) or not token:
             message = payload.get("message") or "HET did not return an access token"
             raise HetApiAuthError(str(message))
+        coato_code = payload.get("coatoCode")
+        if coato_code is None and isinstance(data, dict):
+            coato_code = data.get("coatoCode")
+        if coato_code is None:
+            raise HetApiAuthError("HET did not return a Coato-Code")
         self._token = token
+        self._coato_code = str(coato_code)
 
     async def async_get_state(self) -> HetState:
         """Fetch cabinet values, retrying once with a fresh token."""
@@ -102,6 +109,8 @@ class HetApiClient:
                         f"{API_BASE_URL}{STATE_PATH}",
                         headers={
                             "Authorization": f"Bearer {self._token}",
+                            "Coato-Code": self._coato_code or "",
+                            "lang": "RU",
                             "Origin": "https://cabinet.het.uz",
                         },
                     ) as response:
@@ -124,9 +133,21 @@ class HetApiClient:
             if not isinstance(data, dict):
                 raise HetApiConnectionError("HET response has no data object")
             return HetState(
-                balance=_decimal(data.get("balance")),
-                current_month_kwh=_decimal(data.get("currentMonthCalcKwh")),
-                current_month_amount=_decimal(data.get("currentMonthCalcSum")),
+                balance=(
+                    value / Decimal(100)
+                    if (value := _decimal(data.get("balance"))) is not None
+                    else None
+                ),
+                current_month_kwh=(
+                    value / Decimal(1000)
+                    if (value := _decimal(data.get("currentMonthCalcKwh"))) is not None
+                    else None
+                ),
+                current_month_amount=(
+                    value / Decimal(100)
+                    if (value := _decimal(data.get("currentMonthCalcSum"))) is not None
+                    else None
+                ),
             )
 
         raise HetApiAuthError("HET authentication failed")
