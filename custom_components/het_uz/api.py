@@ -106,7 +106,7 @@ def _is_rate_limited(status: int, payload: dict[str, Any]) -> bool:
 
 
 def _is_auth_failure(status: int, payload: dict[str, Any]) -> bool:
-    """Detect expired or invalid credentials; rate limits are handled separately."""
+    """True for 401, token-related 403, or JSON auth signals (not rate limits)."""
     if _is_rate_limited(status, payload):
         return False
     if status == 401:
@@ -149,6 +149,7 @@ assert not _is_auth_failure(
 assert _is_rate_limited(
     400, {"message": "Количество попыток закончилось, попробуйте позже!"}
 )
+assert _rate_limit_message({}) is None  # bare 429 on state is not a login ban
 assert _is_auth_failure(200, {"status": "FORBIDDEN"})
 assert _is_auth_failure(200, {"message": "Token expired"})
 
@@ -181,9 +182,6 @@ class HetApiClient:
 
     def _record_login_attempt(self) -> None:
         _login_throttle[self._login] = (time.time(), self._login_blocked_until())
-
-    def _reset_login_interval(self) -> None:
-        _login_throttle.pop(self._login, None)
 
     def _login_blocked_until(self) -> float:
         return _login_throttle.get(self._login, (0.0, 0.0))[1]
@@ -239,7 +237,7 @@ class HetApiClient:
             self._mark_login_rate_limited(str(message))
         if _is_auth_failure(status, payload):
             self._clear_token()
-            self._reset_login_interval()
+            self._record_login_attempt()
             raise HetApiAuthError("Invalid login or password")
         if status >= 400:
             self._record_login_attempt()
@@ -266,10 +264,13 @@ class HetApiClient:
         _login_throttle[self._login] = (time.time(), 0.0)
 
     async def async_get_state(self) -> HetState:
-        """Fetch cabinet values, retrying once with a fresh token."""
-        self._raise_if_login_blocked()
-        if self._token_needs_refresh():
+        """Fetch cabinet values; re-login on auth failure when login is not blocked."""
+        if self._token is None or (
+            self._token_needs_refresh()
+            and time.time() >= self._login_blocked_until()
+        ):
             await self.async_login()
+        # ponytail: while login is blocked, poll with the current token if we have one
 
         for attempt in range(2):
             try:
@@ -288,14 +289,15 @@ class HetApiClient:
             except (TimeoutError, ClientError) as err:
                 raise HetApiConnectionError("Cannot connect to HET") from err
 
-            if _is_rate_limited(status, payload):
-                message = _rate_limit_message(payload) or f"HTTP {status}"
-                self._mark_login_rate_limited(str(message))
+            if message := _rate_limit_message(payload):
+                self._mark_login_rate_limited(message)
             if _is_auth_failure(status, payload):
-                self._clear_token()
                 if attempt == 0:
-                    await self.async_login(force=True)
+                    if time.time() >= self._login_blocked_until():
+                        self._clear_token()
+                        await self.async_login(force=True)
                     continue
+                self._clear_token()
                 raise HetApiAuthError("HET rejected the credentials")
             if status >= 400:
                 message = payload.get("message") or f"HTTP {status}"
