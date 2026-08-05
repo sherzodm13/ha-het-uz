@@ -11,6 +11,11 @@
         "title": "Reconnect to HET Uzbekistan",
         "description": "Enter the current cabinet password.",
         "data": {"password": "Password"}
+      },
+      "reconfigure": {
+        "title": "Update HET credentials",
+        "description": "Change the login or password for cabinet.het.uz.",
+        "data": {"username": "Login", "password": "Password"}
       }
     },
     "error": {"cannot_connect": "Cannot connect to HET", "invalid_auth": "Invalid login or password"},

@@ -11,6 +11,11 @@
         "title": "HET hisobini qayta ulash",
         "description": "Kabinetning joriy parolini kiriting.",
         "data": {"password": "Parol"}
+      },
+      "reconfigure": {
+        "title": "HET ma’lumotlarini yangilash",
+        "description": "cabinet.het.uz login yoki parolini o‘zgartiring.",
+        "data": {"username": "Login", "password": "Parol"}
       }
     },
     "error": {"cannot_connect": "HET bilan aloqa o‘rnatilmadi", "invalid_auth": "Login yoki parol noto‘g‘ri"},

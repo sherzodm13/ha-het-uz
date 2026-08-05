@@ -38,6 +38,7 @@ class HetConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input[CONF_PASSWORD],
             )
             try:
+                await client.async_login(force=True)
                 await client.async_get_state()
             except HetApiAuthError:
                 errors["base"] = "invalid_auth"
@@ -78,6 +79,7 @@ class HetConfigFlow(ConfigFlow, domain=DOMAIN):
                 async_get_clientsession(self.hass), login, user_input[CONF_PASSWORD]
             )
             try:
+                await client.async_login(force=True)
                 await client.async_get_state()
             except HetApiAuthError:
                 errors["base"] = "invalid_auth"
@@ -93,6 +95,50 @@ class HetConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
             errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change login or password without removing the integration."""
+        reconfigure_entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            client = HetApiClient(
+                async_get_clientsession(self.hass),
+                user_input[CONF_USERNAME],
+                user_input[CONF_PASSWORD],
+            )
+            try:
+                await client.async_login(force=True)
+                await client.async_get_state()
+            except HetApiAuthError:
+                errors["base"] = "invalid_auth"
+            except HetApiConnectionError:
+                errors["base"] = "cannot_connect"
+            else:
+                if user_input[CONF_USERNAME] != reconfigure_entry.data[CONF_USERNAME]:
+                    await self.async_set_unique_id(user_input[CONF_USERNAME])
+                    self._abort_if_unique_id_configured()
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry,
+                    data_updates={
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    },
+                    title=f"HET {user_input[CONF_USERNAME]}",
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_USERNAME, default=reconfigure_entry.data[CONF_USERNAME]
+                ): str,
+                vol.Required(CONF_PASSWORD): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=schema, errors=errors
         )
 
     @staticmethod
