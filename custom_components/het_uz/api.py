@@ -13,8 +13,12 @@ from aiohttp import ClientError, ClientResponse, ClientSession
 
 from .const import API_BASE_URL, LOGIN_PATH, REQUEST_TIMEOUT, STATE_PATH
 
-# ponytail: refresh slightly before expiry; upgrade path is configurable buffer only
+# refresh slightly before expiry; upgrade path is configurable buffer only
 TOKEN_REFRESH_BUFFER = 60
+# module-level throttle survives HA setup retries; upgrade path is hass storage
+LOGIN_MIN_INTERVAL = 30
+LOGIN_RATE_LIMIT_BACKOFF = 3600
+_login_throttle: dict[str, tuple[float, float, bool]] = {}
 
 
 class HetApiError(Exception):
@@ -52,8 +56,20 @@ def _parse_api_timestamp(value: Any) -> float | None:
     """Parse HET ISO timestamps like 2026-08-03T11:59:13.904696391."""
     if not isinstance(value, str):
         return None
+    normalized = value.replace("Z", "+00:00")
+    if "." in normalized:
+        head, tail = normalized.split(".", 1)
+        digits = ""
+        tz = ""
+        for index, ch in enumerate(tail):
+            if ch.isdigit():
+                digits += ch
+            else:
+                tz = tail[index:]
+                break
+        normalized = f"{head}.{digits[:6]}{tz}"
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(normalized).timestamp()
     except ValueError:
         return None
 
@@ -78,33 +94,76 @@ def _response_ok(payload: dict[str, Any]) -> bool:
     return isinstance(payload.get("data"), dict)
 
 
+def _rate_limit_message(payload: dict[str, Any]) -> str | None:
+    """Return a rate-limit message when HET blocks further login attempts."""
+    message = payload.get("message")
+    if not isinstance(message, str):
+        return None
+    lower = message.lower()
+    if any(
+        phrase in lower
+        for phrase in (
+            "попыток закончилось",
+            "try again later",
+            "too many",
+            "rate limit",
+        )
+    ):
+        return message
+    return None
+
+
+def _is_rate_limited(status: int, payload: dict[str, Any]) -> bool:
+    return status == 429 or _rate_limit_message(payload) is not None
+
+
 def _is_auth_failure(status: int, payload: dict[str, Any]) -> bool:
-    """Detect expired or rejected tokens even when HTTP status stays 200."""
-    if status in (401, 403):
+    """True for 401, token-related 403, or JSON auth signals (not rate limits)."""
+    if _is_rate_limited(status, payload):
+        return False
+    if status == 401:
         return True
+    if status == 403:
+        message = payload.get("message")
+        if isinstance(message, str):
+            lower = message.lower()
+            return any(
+                phrase in lower
+                for phrase in ("token", "unauthorized", "авториз")
+            )
+        return False
     api_status = payload.get("status")
     if isinstance(api_status, str):
         upper = api_status.upper()
-        if upper in ("UNAUTHORIZED", "FORBIDDEN", "TOKEN_EXPIRED"):
+        if upper in ("UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN"):
             return True
     message = payload.get("message")
     if isinstance(message, str):
         lower = message.lower()
         if any(
             phrase in lower
-            for phrase in ("token", "авториз", "authorization", "unauthorized")
+            for phrase in ("unauthorized", "token expired", "авториз")
         ):
             return True
     return False
 
 
-# ponytail: fail fast if token helper logic regresses
+# fail fast if token helper logic regresses
 assert _parse_api_timestamp("2026-08-03T11:59:13.904696391") is not None
 assert _parse_api_timestamp("not-a-date") is None
 assert _response_ok({"message": "Successfully loaded", "data": {}})
 assert not _response_ok({"status": "BAD_REQUEST", "message": "nope"})
 assert _is_auth_failure(401, {})
 assert not _is_auth_failure(200, {"status": "BAD_REQUEST"})
+assert not _is_auth_failure(
+    403, {"message": "Количество попыток закончилось, попробуйте позже!"}
+)
+assert _is_rate_limited(
+    400, {"message": "Количество попыток закончилось, попробуйте позже!"}
+)
+assert _rate_limit_message({}) is None  # bare 429 on state is not a login ban
+assert _is_auth_failure(200, {"status": "FORBIDDEN"})
+assert _is_auth_failure(200, {"message": "Token expired"})
 
 
 class HetApiClient:
@@ -125,6 +184,33 @@ class HetApiClient:
             return False
         return time.time() >= self._token_expires_at - TOKEN_REFRESH_BUFFER
 
+    def _has_valid_token(self) -> bool:
+        return self._token is not None and not self._token_needs_refresh()
+
+    def _clear_token(self) -> None:
+        self._token = None
+        self._coato_code = None
+        self._token_expires_at = None
+
+    def _record_login_attempt(self, *, auth_failure: bool = False) -> None:
+        _, blocked_until, _ = _login_throttle.get(self._login, (0.0, 0.0, False))
+        _login_throttle[self._login] = (time.time(), blocked_until, auth_failure)
+
+    def _login_blocked_until(self) -> float:
+        return _login_throttle.get(self._login, (0.0, 0.0, False))[1]
+
+    def _raise_if_login_blocked(self) -> None:
+        blocked_until = self._login_blocked_until()
+        if time.time() < blocked_until:
+            raise HetApiConnectionError(
+                "HET login temporarily blocked due to rate limiting, try again later"
+            )
+
+    def _mark_login_rate_limited(self, message: str) -> None:
+        now = time.time()
+        _login_throttle[self._login] = (now, now + LOGIN_RATE_LIMIT_BACKOFF, False)
+        raise HetApiConnectionError(message)
+
     async def _json(self, response: ClientResponse) -> dict[str, Any]:
         try:
             payload = await response.json(content_type=None)
@@ -134,8 +220,20 @@ class HetApiClient:
             raise HetApiConnectionError("HET returned an unexpected response")
         return payload
 
-    async def async_login(self) -> None:
+    async def async_login(self, *, force: bool = False) -> None:
         """Authenticate and keep the bearer token in memory only."""
+        self._raise_if_login_blocked()
+        now = time.time()
+        last_login, _, last_auth = _login_throttle.get(self._login, (0.0, 0.0, False))
+        if not force and now - last_login < LOGIN_MIN_INTERVAL:
+            if self._has_valid_token():
+                return
+            if last_auth:
+                raise HetApiAuthError("Invalid login or password")
+            raise HetApiConnectionError(
+                "HET login throttled locally, try again shortly"
+            )
+
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
                 async with self._session.post(
@@ -146,11 +244,18 @@ class HetApiClient:
                     status = response.status
                     payload = await self._json(response)
         except (TimeoutError, ClientError) as err:
+            self._record_login_attempt()
             raise HetApiConnectionError("Cannot connect to HET") from err
 
-        if status in (401, 403):
+        if _is_rate_limited(status, payload):
+            message = _rate_limit_message(payload) or f"HTTP {status}"
+            self._mark_login_rate_limited(str(message))
+        if _is_auth_failure(status, payload):
+            self._clear_token()
+            self._record_login_attempt(auth_failure=True)
             raise HetApiAuthError("Invalid login or password")
         if status >= 400:
+            self._record_login_attempt()
             message = payload.get("message") or f"HTTP {status}"
             raise HetApiConnectionError(str(message))
 
@@ -164,6 +269,11 @@ class HetApiClient:
 
         expires_in = _payload_field(payload, "expiresIn")
         issued_at = _parse_api_timestamp(payload.get("timestamp")) or time.time()
+        if expires_in is not None and not isinstance(expires_in, bool):
+            try:
+                expires_in = float(expires_in)
+            except (TypeError, ValueError):
+                expires_in = None
         if isinstance(expires_in, (int, float)) and expires_in > 0:
             self._token_expires_at = issued_at + float(expires_in)
         else:
@@ -171,12 +281,18 @@ class HetApiClient:
 
         self._token = token
         self._coato_code = str(coato_code)
+        _login_throttle[self._login] = (time.time(), 0.0, False)
 
     async def async_get_state(self) -> HetState:
-        """Fetch cabinet values, retrying once with a fresh token."""
-        if self._token_needs_refresh():
+        """Fetch cabinet values; re-login on auth failure when login is not blocked."""
+        if self._token is None or (
+            self._token_needs_refresh()
+            and time.time() >= self._login_blocked_until()
+        ):
             await self.async_login()
+        # ponytail: while login is blocked, poll with the current token if we have one
 
+        skipped_relogin_due_to_block = False
         for attempt in range(2):
             try:
                 async with asyncio.timeout(REQUEST_TIMEOUT):
@@ -194,12 +310,21 @@ class HetApiClient:
             except (TimeoutError, ClientError) as err:
                 raise HetApiConnectionError("Cannot connect to HET") from err
 
+            if message := _rate_limit_message(payload):
+                self._mark_login_rate_limited(message)
             if _is_auth_failure(status, payload):
-                self._token = None
-                self._token_expires_at = None
                 if attempt == 0:
-                    await self.async_login()
+                    if time.time() < self._login_blocked_until():
+                        skipped_relogin_due_to_block = True
+                    else:
+                        self._clear_token()
+                        await self.async_login(force=True)
                     continue
+                self._clear_token()
+                if skipped_relogin_due_to_block:
+                    raise HetApiConnectionError(
+                        "HET login temporarily blocked due to rate limiting, try again later"
+                    )
                 raise HetApiAuthError("HET rejected the credentials")
             if status >= 400:
                 message = payload.get("message") or f"HTTP {status}"
@@ -229,4 +354,8 @@ class HetApiClient:
                 ),
             )
 
+        if skipped_relogin_due_to_block:
+            raise HetApiConnectionError(
+                "HET login temporarily blocked due to rate limiting, try again later"
+            )
         raise HetApiAuthError("HET authentication failed")
