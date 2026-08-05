@@ -142,7 +142,14 @@ def _is_auth_failure(status: int, payload: dict[str, Any]) -> bool:
         lower = message.lower()
         if any(
             phrase in lower
-            for phrase in ("unauthorized", "token expired", "авториз")
+            for phrase in (
+                "unauthorized",
+                "token expired",
+                "авториз",
+                "логин или пароль",
+                "invalid login",
+                "wrong password",
+            )
         ):
             return True
     return False
@@ -164,6 +171,7 @@ assert _is_rate_limited(
 assert _rate_limit_message({}) is None  # bare 429 on state is not a login ban
 assert _is_auth_failure(200, {"status": "FORBIDDEN"})
 assert _is_auth_failure(200, {"message": "Token expired"})
+assert _is_auth_failure(400, {"message": "Логин или пароль неверный!"})
 
 
 class HetApiClient:

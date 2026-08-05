@@ -11,6 +11,11 @@
         "title": "Повторная авторизация HET",
         "description": "Введите актуальный пароль личного кабинета.",
         "data": {"password": "Пароль"}
+      },
+      "reconfigure": {
+        "title": "Изменить данные HET",
+        "description": "Измените логин или пароль для cabinet.het.uz.",
+        "data": {"username": "Логин", "password": "Пароль"}
       }
     },
     "error": {"cannot_connect": "Не удалось подключиться к HET", "invalid_auth": "Неверный логин или пароль"},
