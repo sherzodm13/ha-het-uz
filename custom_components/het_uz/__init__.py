@@ -5,9 +5,10 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import HetApiClient
+from .api import HetApiAuthError, HetApiClient, HetApiConnectionError
 from .const import PLATFORMS
 from .coordinator import HetDataUpdateCoordinator
 
@@ -23,7 +24,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: HetConfigEntry) -> bool:
     )
     coordinator = HetDataUpdateCoordinator(hass, entry, client)
     # ponytail: config flow may have just logged in; force avoids 30s local throttle on setup
-    await client.async_login(force=True)
+    try:
+        await client.async_login(force=True)
+    except HetApiAuthError as err:
+        raise ConfigEntryAuthFailed("HET authentication failed") from err
+    except HetApiConnectionError as err:
+        # transient network/DNS failure: let HA retry setup with backoff
+        raise ConfigEntryNotReady(f"Cannot connect to HET: {err}") from err
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
